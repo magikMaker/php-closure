@@ -1,12 +1,33 @@
 <?php
 /**
  * Updated by magikMaker
+ * @link https://github.com/magikMaker/php-closure
  *
  * New features / updates
  * - PHP 5 compatability (visibility)
  * - add source
- * - add closure.jar file location
+ * - set closure.jar file location
+ * - set soy compiler file location
+ * - set lib location
  *
+ * $c = new PhpClosure();
+ * $c->addSource($js_file_contents)                   // new
+ *   ->libDir('/lib/')                                // new
+ *   ->closureCompiler('/lib/closure-compiler.jar')   // new
+ *   ->soyCompiler('/lib/soy-to-js-src-compiler.jar') // new
+ *   ->advancedMode()
+ *   ->cacheDir('/cache/')
+ *   ->localCompile()
+ *   ->write();
+ *
+ * If you only set the libDir, the script assumes the files
+ * 'closure-compiler.jar' and 'soy-to-js-src-compiler.jar' to reside in that
+ * folder.
+ *
+ * You can still use the define('LIB_DIR', getcwd() . 'lib/'); method as
+ * described below. If you do that, there's no need to set the compilers.
+ *
+ * ---
  *
  * Copyright 2012 Alex Kennberg (https://github.com/kennberg/php-closure)
  * Extended under the same license: Apache License 2.0.
@@ -61,23 +82,26 @@
  * details on the compiler options.
  */
 class PhpClosure {
-
-    private $sources              = array();
-    private $mode                = "WHITESPACE_ONLY";
-    private $warning_level       = "DEFAULT";
-    private $use_closure_library = false;
-    private $pretty_print        = false;
-    private $local_compile       = false;
+    private $cache_dir           = '';
+    private $closure_compiler;
+    private $code_url_prefix     = '';
     private $debug               = true;
-    private $cache_dir           = "";
-    private $code_url_prefix     = "";
+    private $js_source           = '';
+    private $mode                = 'WHITESPACE_ONLY';
+    private $local_compile       = false;
+    private $lib_dir;
+    private $pretty_print        = false;
+    private $sources             = array();
+    private $soy_compiler;
+    private $use_closure_library = false;
+    private $warning_level       = 'DEFAULT';
 
     /**
      * Constructor
      *
      * @access public
      */
-    public function __construc(){}
+    public function __construct(){}
 
     /**
      * Adds a source file to the list of files to compile.  Files will be
@@ -88,6 +112,13 @@ class PhpClosure {
     public function add($file) {
         $this->sources[] = $file;
         return $this;
+    }
+
+    /**
+     *
+     */
+    public function closureCompiler($compiler){
+        $this->
     }
 
     /**
@@ -129,6 +160,14 @@ class PhpClosure {
     }
 
     /**
+     * Add source JavaScript to be compiled
+     */
+    public function addSource($source){
+        $this->js_source .= $source ."\n\n";
+        return $this;
+    }
+
+    /**
      * Sets the directory where the compilation results should be cached, if
      * not set then caching will be disabled and the compiler will be invoked
      * for every request (NOTE: this will hit ratelimits pretty fast!)
@@ -141,10 +180,22 @@ class PhpClosure {
     }
 
     /**
+     * Set the directory for the library files
+     *
+     * @access public
+     * @return PhpClosure object
+     */
+    public function libDir($dir){
+        $this->lib_dir = $dir;
+        return $this;
+    }
+
+    /**
      * Sets whether to use the Closure Library.  i.e. goog.requires will be
      * resolved and the library code made available.
      *
      * @access public
+     * @return PhpClosure object
      */
     public function useClosureLibrary() {
         $this->use_closure_library = true;
@@ -301,41 +352,39 @@ class PhpClosure {
         header("Content-Type: text/javascript");
 
         // No cache directory so just dump the output.
-        if ($this->cache_dir == "") {
-          echo $this->_compile();
-
+        if (empty($this->cache_dir)) {
+            echo $this->compile();
         }
         else {
-          $cache_file = $this->getCacheFileName();
+            $cache_file = $this->getCacheFileName();
 
-          if ($this->isRecompileNeeded($cache_file)) {
-            $result = $this->_compile();
+            if ($this->isRecompileNeeded($cache_file)) {
+                $result = $this->compile();
 
-            if ($result !== false){
-                file_put_contents($cache_file, $result);
-            }
+                if ($result !== false){
+                    file_put_contents($cache_file, $result);
+                }
 
-            echo $result;
-
-          }
-          else {
-            // No recompile needed, but see if we can send a 304 to the browser.
-            $cache_mtime = filemtime($cache_file);
-            $etag = md5_file($cache_file);
-            header("Last-Modified: ".gmdate("D, d M Y H:i:s", $cache_mtime)." GMT");
-            header("Etag: $etag");
-
-            if (@strtotime(@$_SERVER['HTTP_IF_MODIFIED_SINCE']) == $cache_mtime ||
-                @trim(@$_SERVER['HTTP_IF_NONE_MATCH']) == $etag) {
-              header("HTTP/1.1 304 Not Modified");
+                echo $result;
             }
             else {
-              // Read the cache file and send it to the client.
-              echo file_get_contents($cache_file);
+                // No recompile needed, but see if we can send a 304 to the browser.
+                $cache_mtime = filemtime($cache_file);
+                $etag        = md5_file($cache_file);
+                header("Last-Modified: ".gmdate("D, d M Y H:i:s", $cache_mtime)." GMT");
+                header("Etag: $etag");
+
+                if (@strtotime(@$_SERVER['HTTP_IF_MODIFIED_SINCE']) == $cache_mtime ||
+                    @trim(@$_SERVER['HTTP_IF_NONE_MATCH']) == $etag) {
+                        header("HTTP/1.1 304 Not Modified");
+                }
+                else {
+                    // Read the cache file and send it to the client.
+                    echo file_get_contents($cache_file);
+                }
             }
-          }
         }
-      }
+    }
 
     /**
      *
@@ -370,7 +419,7 @@ class PhpClosure {
     /**
      * @access private
      */
-    private function _exec($cmd, &$stdout, &$stderr) {
+    private function exec($cmd, &$stdout, &$stderr) {
         $process = proc_open(
             $cmd,
             array(
@@ -390,10 +439,29 @@ class PhpClosure {
     }
 
     /**
+     * Returns the path to the lib dir
+     *
+     * @return string the path to the lib dir
+     */
+    private function getLibDir(){
+        $lib_dir = '';
+
+        if(defined('LIB_DIR')){
+            $lib_dir = LIB_DIR;
+        }
+        elseif(!empty($this->lib_dir)){
+            $lib_dir = $this->lib_dir;
+        }
+
+        return $lib_dir;
+    }
+
+    /**
+     * @todo lib dir
      * @access private
      */
-    private function _localCompile() {
-        $js_cmd = 'java -jar ' . LIB_DIR . 'third-party/compiler.jar';
+    private function doLocalCompile() {
+        $js_cmd  = 'java -jar ' . $this->getClosureCompilerLocation();
         $js_cmd .= ' --compilation_level ' . $this->mode;
         $js_cmd .= ' --warning_level ' . $this->warning_level;
 
@@ -401,27 +469,30 @@ class PhpClosure {
             $js_cmd .= ' --formatting pretty_print';
         }
 
-        $soy_cmd = 'java -jar ' . LIB_DIR . 'third-party/SoyToJsSrcCompiler.jar';
+        $soy_cmd         = 'java -jar ' . $this->getSoyCompilerLocation();
         $soy_js_filepath = $this->cache_dir . 'soy.js';
-        $soy_cmd .= " --outputPathFormat $soy_js_filepath";
-        $soy_file_count = 0;
+        $soy_cmd        .= " --outputPathFormat $soy_js_filepath";
+        $soy_file_count  = 0;
+
+        $this->addSourceToSources();
 
         foreach ($this->sources as $src) {
-          // Determine if this is soy or js by file extension.
-          $i = strrpos($src, '.');
+            // Determine if this is soy or js by file extension.
+            $i = strrpos($src, '.');
 
-          if ($i > 0 && substr($src, $i + 1) === 'soy') {
-            $soy_cmd .= " $src";
-            $soy_file_count++;
-          }
-          else {
-            $js_cmd .= " --js $src";
-          }
+            //if ($i > 0 && substr($src, $i + 1) === 'soy') {
+            if ($i > 0 && substr($src, $i + 1) === 'soy') {
+                $soy_cmd .= " $src";
+                $soy_file_count++;
+            }
+            else {
+                $js_cmd .= " --js $src";
+            }
         }
 
         // Run soy compiler.
         if ($soy_file_count > 0) {
-          $this->_exec($soy_cmd, $stdout, $stderr);
+          $this->exec($soy_cmd, $stdout, $stderr);
 
           if (!strlen($stderr)) {
             $js_cmd .= ' --js ' . LIB_DIR . 'third-party/soyutils.js';
@@ -435,7 +506,7 @@ class PhpClosure {
         }
 
         // Run JS compiler.
-        $this->_exec($js_cmd, $result, $stderr);
+        $this->exec($js_cmd, $result, $stderr);
 
         if (strlen($stderr)) {
 
@@ -457,17 +528,16 @@ class PhpClosure {
     /*
      * @access private
      */
-    private function _compile() {
+    private function compile() {
         if ($this->local_compile) {
-            return $this->_localCompile();
+            return $this->doLocalCompile();
         }
 
         // Quieten strict notices.
-        $code = $originalSize = $originalGzipSize = $compressedSize = $compressedGzipSize = $compileTime = '';
-
-        $tree = $this->parseXml($this->makeRequest());
-
+        $code   = $originalSize = $originalGzipSize = $compressedSize = $compressedGzipSize = $compileTime = '';
+        $tree   = $this->parseXml($this->makeRequest());
         $result = $tree;
+
         foreach ($result as $node) {
 
             switch ($node["tag"]) {
@@ -528,11 +598,11 @@ class PhpClosure {
                 "Generated: " . Date("Y/m/d H:i:s T") . "');\r\n";
 
             if (isset($errors)) {
-                $result .= $this->_printWarnings($errors, "error");
+                $result .= $this->printWarnings($errors, "error");
             }
 
             if (isset($warnings)) {
-                $result .= $this->_printWarnings($warnings, "warn");
+                $result .= $this->printWarnings($warnings, "warn");
             }
 
             $result .= "}\r\n\r\n";
@@ -546,7 +616,7 @@ class PhpClosure {
     /**
      * @access private
      */
-	private function _printWarnings($warnings, $level="log") {
+	private function printWarnings($warnings, $level="log") {
         $result = "";
 
         foreach ($warnings as $warning) {
@@ -727,6 +797,56 @@ class PhpClosure {
         }
 
         return $tree;
+    }
+
+    /**
+     * writes the source to a temporary file and adds that file to the sources
+     */
+    private function addSourceToSources(){
+        if(!empty($this->js_source)){
+            $dir                  = empty($this->cache_dir) ? dirname(__FILE__) : $this->cache_dir;
+            $this->js_source_file = $dir.DIRECTORY_SEPARATOR.mt_rand(10000000, 99999999);
+            $this->sources[]      = $this->js_source_file;
+            file_put_contents($this->js_source_file, $this->js_source);
+        }
+    }
+
+    /**
+     * Returns the file location of the closure compiler
+     *
+     * @access private
+     * @return string the location of the closure compiler jar file
+     */
+    private function getClosureCompilerLocation(){
+        $closure_location = '';
+
+        if(!empty($this->closure_compiler)){
+            $closure_location = $this->closure_compiler;
+        }
+        else{
+            $closure_location = $this->getLibDir().'closure-compiler.jar';
+        }
+
+        return $closure_location;
+    }
+
+    /**
+     * Returns the location of the Soy To JS Src Compiler jar file
+     *
+     * @access private
+     * @return string the file location of the jar file
+     */
+    private function getSoyCompilerLocation(){
+        $soy_location = '';
+
+        if(!empty($this->soy_compiler)){
+            $soy_location = $this->soy_compiler;
+        }
+        else{
+            $soy_location = $this->getLibDir().'soy-to-js-src-compiler.jar';
+        }
+
+        return $soy_location;
     }
 
 }
