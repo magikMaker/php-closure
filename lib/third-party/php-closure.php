@@ -118,7 +118,7 @@ class PhpClosure {
      *
      */
     public function closureCompiler($compiler){
-        $this->
+        //$this->
     }
 
     /**
