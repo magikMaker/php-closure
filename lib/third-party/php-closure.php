@@ -18,7 +18,7 @@
  *   ->advancedMode()
  *   ->cacheDir('/cache/')
  *   ->localCompile()
- *   ->write();
+ *   ->write(false); // optionally add false to only concatenate
  *
  * If you only set the libDir, the script assumes the files
  * 'closure-compiler.jar' and 'soy-to-js-src-compiler.jar' to reside in that
@@ -78,13 +78,14 @@
  *   ->localCompile() // new
  *   ->write();
  *
- * See http://code.google.com/closure/compiler/docs/api-ref.html for more
- * details on the compiler options.
+ * For more details on the compiler options:
+ * @link http://code.google.com/closure/compiler/docs/api-ref.html
  */
 class PhpClosure {
     private $cache_dir           = '';
     private $closure_compiler;
     private $code_url_prefix     = '';
+    private $compress            = true;
     private $debug               = true;
     private $js_source           = '';
     private $mode                = 'WHITESPACE_ONLY';
@@ -115,10 +116,25 @@ class PhpClosure {
     }
 
     /**
+     * Sets the closure compiler location
      *
+     * @param String $compiler
+     * @return PhpClosure $this
      */
     public function closureCompiler($compiler){
-        //$this->
+        $this->closure_compiler = $compiler;
+        return $this;
+    }
+
+    /**
+     * Sets the soy compiler location
+     *
+     * @param String $compiler
+     * @return PhpClosure $this
+     */
+    public function soyCompiler($compiler){
+        $this->soy_compiler = $compiler;
+        return $this;
     }
 
     /**
@@ -173,6 +189,7 @@ class PhpClosure {
      * for every request (NOTE: this will hit ratelimits pretty fast!)
      *
      * @access public
+     * @return PhpClosure object
      */
     public function cacheDir($dir) {
         $this->cache_dir = $dir;
@@ -347,13 +364,17 @@ class PhpClosure {
      * invoking a recompile, if necessary.
      *
      * @access public
+     * @param Boolean [$compress] whether or not to compile, default: true
+     * @return void displays the JavaScript
      */
-    public function write() {
-        header("Content-Type: text/javascript");
+    public function write($compress = true) {
+        $javascript     = '';
+        $this->compress = $compress;
+        $this->addSourceToSources();
 
         // No cache directory so just dump the output.
         if (empty($this->cache_dir)) {
-            echo $this->compile();
+            $javascript = $this->compile();
         }
         else {
             $cache_file = $this->getCacheFileName();
@@ -363,9 +384,8 @@ class PhpClosure {
 
                 if ($result !== false){
                     file_put_contents($cache_file, $result);
+                    $javascript = $result;
                 }
-
-                echo $result;
             }
             else {
                 // No recompile needed, but see if we can send a 304 to the browser.
@@ -380,10 +400,13 @@ class PhpClosure {
                 }
                 else {
                     // Read the cache file and send it to the client.
-                    echo file_get_contents($cache_file);
+                    $javascript = file_get_contents($cache_file);
                 }
             }
         }
+
+        header("Content-Type: text/javascript");
+        echo $javascript;
     }
 
     /**
@@ -525,12 +548,35 @@ class PhpClosure {
         return $result;
     }
 
-    /*
+    /**
+     * Returns the concatenated JavaScript
+     *
+     * @access private
+     * @return String the concatenated JavaScript
+     */
+    private function doLocalConcatenate(){
+        $javascript = '';
+
+        foreach($this->sources as $k => $v){
+            $javascript .= "\n\n";
+            $javascript .= '/* '.str_pad($v.' ', 74, '*').'*/';
+            $javascript .= "\n\n";
+            $javascript .= file_get_contents($v);
+        }
+
+        return $javascript;
+    }
+
+    /**
      * @access private
      */
     private function compile() {
-        if ($this->local_compile) {
+
+        if (true === $this->compress && $this->local_compile) {
             return $this->doLocalCompile();
+        }
+        elseif (false === $this->compress && $this->local_compile) {
+            return $this->doLocalConcatenate();
         }
 
         // Quieten strict notices.
@@ -616,7 +662,7 @@ class PhpClosure {
     /**
      * @access private
      */
-	private function printWarnings($warnings, $level="log") {
+    private function printWarnings($warnings, $level="log") {
         $result = "";
 
         foreach ($warnings as $warning) {
@@ -634,14 +680,14 @@ class PhpClosure {
     /**
      * @access private
      */
-	private function getCacheFileName() {
+    private function getCacheFileName() {
         return $this->cache_dir . $this->getHash() . ".js";
     }
 
-	/**
+    /**
      * @access private
      */
-	private function getHash() {
+    private function getHash() {
         return md5(implode(",", $this->sources) . "-" .
             $this->mode . "-" .
             $this->warning_level . "-" .
@@ -654,7 +700,7 @@ class PhpClosure {
     /**
      * @access private
      */
-	private function getParams() {
+    private function getParams() {
         $params = array();
 
         foreach ($this->getParamList() as $key => $value) {
@@ -705,7 +751,7 @@ class PhpClosure {
     /**
      * @access private
      */
-	private function readSources() {
+    private function readSources() {
         $code = "";
 
         foreach ($this->sources as $src) {
@@ -771,10 +817,10 @@ class PhpClosure {
         return $outData;
     }
 
-	/**
+    /**
      * @access private
      */
-	private function parseXml($data) {
+    private function parseXml($data) {
         $xml = new SimpleXMLElement($data);
         return $this->parseXmlHelper($xml);
     }
@@ -805,7 +851,7 @@ class PhpClosure {
     private function addSourceToSources(){
         if(!empty($this->js_source)){
             $dir                  = empty($this->cache_dir) ? dirname(__FILE__) : $this->cache_dir;
-            $this->js_source_file = $dir.DIRECTORY_SEPARATOR.mt_rand(10000000, 99999999);
+            $this->js_source_file = $dir.mt_rand(10000000, 99999999);
             $this->sources[]      = $this->js_source_file;
             file_put_contents($this->js_source_file, $this->js_source);
         }
